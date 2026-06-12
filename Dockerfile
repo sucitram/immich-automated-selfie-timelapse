@@ -9,7 +9,7 @@ RUN npm run build
 # Stage 2: Build Rust binary
 FROM ubuntu:24.04 AS rust-build
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates \
+    curl ca-certificates git \
     cmake g++ make pkg-config \
     libssl-dev libdlib-dev libatlas-base-dev liblapack-dev \
     && rm -rf /var/lib/apt/lists/*

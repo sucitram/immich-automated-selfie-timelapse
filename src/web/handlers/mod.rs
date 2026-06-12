@@ -43,7 +43,7 @@ use ws::ws_handler;
 // Re-export types that may be needed by other modules
 pub use albums::AlbumInfo;
 pub use config::ConfigResponse;
-pub use health::ConnectionStatus;
+pub use health::{ConnectionStatus, HealthResponse};
 pub use output::{BulkDeleteResponse, FolderImagesResponse, ImageInfo, OutputFolderInfo};
 pub use people::{AssetCountResponse, PersonInfo};
 pub use processing::{ProgressResponse, SkipStatsResponse};
