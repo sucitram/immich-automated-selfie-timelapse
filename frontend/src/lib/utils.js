@@ -33,6 +33,48 @@ export function sanitizeFolderName(name, id) {
 }
 
 /**
+ * Build a unique job slug matching the backend's make_job_slug in src/utils.rs.
+ * IMPORTANT: Must replicate that function's logic exactly.
+ *
+ * @param {string|null} personName
+ * @param {string} personId
+ * @param {string|null} dateFrom - YYYY-MM-DD or empty
+ * @param {string|null} dateTo   - YYYY-MM-DD or empty
+ * @param {Array<{name:string}>} albums
+ * @returns {string}
+ */
+export function makeJobSlug(personName, personId, dateFrom, dateTo, albums) {
+  const person = sanitizeFolderName(personName, personId).slice(0, 30);
+
+  const from = dateFrom && dateFrom.trim() ? dateFrom.slice(0, 10).replace(/[^a-zA-Z0-9-]/g, '') : null;
+  const to   = dateTo   && dateTo.trim()   ? dateTo.slice(0, 10).replace(/[^a-zA-Z0-9-]/g, '') : null;
+
+  let dates;
+  if (!from && !to) dates = 'all';
+  else if (from && !to) dates = `from_${from}`;
+  else if (!from && to) dates = `to_${to}`;
+  else dates = `${from}_${to}`;
+
+  const albumPart = _albumSlug(albums);
+  const slug = albumPart ? `${person}_${dates}_${albumPart}` : `${person}_${dates}`;
+  return slug.slice(0, 80);
+}
+
+function _albumSlug(albums) {
+  if (!albums || albums.length === 0) return null;
+  if (albums.length === 1) {
+    return sanitizeFolderName(albums[0].name, 'album').slice(0, 20);
+  }
+  if (albums.length === 2) {
+    const a = sanitizeFolderName(albums[0].name, 'album').slice(0, 10);
+    const b = sanitizeFolderName(albums[1].name, 'album').slice(0, 10);
+    const combined = `${a}_${b}`;
+    return combined.length <= 25 ? combined : `${albums.length}_albums`;
+  }
+  return `${albums.length}_albums`;
+}
+
+/**
  * Format bytes to human-readable size string.
  *
  * @param {number} bytes - Size in bytes

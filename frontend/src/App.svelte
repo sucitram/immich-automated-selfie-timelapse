@@ -9,7 +9,7 @@
   import ProgressDisplay from './lib/components/ProgressDisplay.svelte';
   import ResultsView from './lib/components/ResultsView.svelte';
   import SettingsPanel from './lib/components/SettingsPanel.svelte';
-  import { sanitizeFolderName } from './lib/utils.js';
+  import { makeJobSlug } from './lib/utils.js';
   import { STORAGE_KEYS, WS, JOB_STATUS, API } from './lib/constants.js';
 
   // Load persisted state from localStorage
@@ -88,7 +88,13 @@
   // Compute folder name from progress for video display
   let completedFolderName = $derived(
     progress.person_name || progress.person_id
-      ? sanitizeFolderName(progress.person_name, progress.person_id)
+      ? makeJobSlug(
+          progress.person_name,
+          progress.person_id,
+          progress.date_from ?? null,
+          progress.date_to ?? null,
+          (progress.album_names ?? []).map(n => ({ name: n }))
+        )
       : null
   );
 

@@ -42,6 +42,8 @@ pub struct ProgressResponse {
     pub skip_stats: SkipStatsResponse,
     pub person_id: Option<String>,
     pub person_name: Option<String>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
     pub album_ids: Vec<String>,
     pub album_names: Vec<String>,
 }
@@ -56,6 +58,8 @@ impl From<&Progress> for ProgressResponse {
             skip_stats: SkipStatsResponse::from(&p.skip_stats),
             person_id: p.person_id.clone(),
             person_name: p.person_name.clone(),
+            date_from: p.date_from.clone(),
+            date_to: p.date_to.clone(),
             album_ids: p.album_ids.clone(),
             album_names: p.album_names.clone(),
         }
@@ -76,6 +80,10 @@ pub struct StartRequest {
     pub date_to: Option<String>,
     pub album_ids: Vec<String>,
     pub album_names: Vec<String>,
+    /// Delete and recreate the output directory before processing.
+    /// Defaults to false (resume from existing output when possible).
+    #[serde(default)]
+    pub force_rerun: bool,
 }
 
 /// Validate that a person_id looks reasonable (non-empty, reasonable length, safe characters).
@@ -124,6 +132,8 @@ pub async fn start_processing(
             message: Some("Starting...".to_string()),
             person_id: Some(request.person_id.clone()),
             person_name: request.person_name.clone(),
+            date_from: request.date_from.clone(),
+            date_to: request.date_to.clone(),
             album_ids: request.album_ids.clone(),
             album_names: request.album_names.clone(),
             ..Progress::default()
@@ -150,6 +160,7 @@ pub async fn start_processing(
         date_to: request.date_to,
         album_ids: request.album_ids,
         album_names: request.album_names,
+        force_rerun: request.force_rerun,
     };
 
     let job_state = state.clone();

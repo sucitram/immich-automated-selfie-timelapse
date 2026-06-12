@@ -8,18 +8,18 @@
 
 mod processing;
 
-use crate::config::{TimeIntervalConfig, TimeRange};
+use crate::config::{PersistableConfig, TimeIntervalConfig, TimeRange};
 use crate::error::{Error, Result};
 use crate::immich_api::{Asset, FaceData, ImmichClient};
 use crate::pipeline::Pipeline;
-use crate::utils::sanitize_folder_name;
+use crate::utils::make_job_slug;
 use crate::video::compile_timelapse;
 use crate::web::{AppState, AtomicSkipStats, JobStatus, Progress};
 
 use processing::{process_single_asset, AssetProcessResult, DebugDirs, OutputDirs};
 
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
@@ -118,6 +118,24 @@ pub struct JobParams {
     pub date_to: Option<String>,
     pub album_ids: Vec<String>,
     pub album_names: Vec<String>,
+    /// When true, delete and recreate the output directory even if it already exists.
+    /// When false (default), reuse the existing directory and skip assets whose output
+    /// files are already present.
+    pub force_rerun: bool,
+}
+
+/// Serialisable record written to `job_manifest.json` inside each job directory.
+#[derive(serde::Serialize)]
+struct JobManifest<'a> {
+    person_id: &'a str,
+    person_name: Option<&'a str>,
+    date_from: Option<&'a str>,
+    date_to: Option<&'a str>,
+    album_ids: &'a [String],
+    album_names: &'a [String],
+    force_rerun: bool,
+    run_at: String,
+    config: PersistableConfig,
 }
 
 /// Run the complete processing pipeline.
@@ -180,25 +198,31 @@ async fn run_job_inner(
 ) -> Result<PathBuf> {
     let config = state.config.read().await.clone();
 
-    // Create person-specific output directory
-    let folder_name = sanitize_folder_name(params.person_name.as_deref(), &params.person_id);
-    let person_dir = config.output_dir.join(&folder_name);
+    // Build a slug that encodes person + date range + album selection so that
+    // multiple jobs for the same person coexist on disk.
+    let folder_name = make_job_slug(
+        params.person_name.as_deref(),
+        &params.person_id,
+        params.date_from.as_deref(),
+        params.date_to.as_deref(),
+        &params.album_names,
+    );
+    let job_dir = config.output_dir.join(&folder_name);
 
-    // If the folder exists, delete all its contents to start fresh
-    if person_dir.exists() {
-        tracing::info!("Removing existing folder: {}", person_dir.display());
-        tokio::fs::remove_dir_all(&person_dir).await?;
+    if params.force_rerun && job_dir.exists() {
+        tracing::info!("force_rerun: removing existing folder {}", job_dir.display());
+        tokio::fs::remove_dir_all(&job_dir).await?;
     }
 
-    // Create output directories
-    let images_dir = person_dir.join("images");
+    // Create output directories (idempotent — create_dir_all is a no-op if they exist)
+    let images_dir = job_dir.join("images");
     tokio::fs::create_dir_all(&images_dir)
         .await
         .map_err(|e| permission_aware_io_error(e, &images_dir))?;
 
     // Create debug directories if enabled
     let debug = if config.processing.output.keep_intermediates {
-        let debug_base = person_dir.join("debug");
+        let debug_base = job_dir.join("debug");
         tokio::fs::create_dir_all(&debug_base).await?;
         Some(DebugDirs { base: debug_base })
     } else {
@@ -208,19 +232,62 @@ async fn run_job_inner(
     let video_filename = format!("{}.mp4", folder_name);
     let output_dirs = OutputDirs {
         images: images_dir.clone(),
-        video: person_dir.join(&video_filename),
+        video: job_dir.join(&video_filename),
         debug,
     };
 
-    tracing::info!("Output directory: {}", person_dir.display());
+    tracing::info!("Output directory: {}", job_dir.display());
+
+    // Write manifest so the folder is self-documenting.
+    let manifest = JobManifest {
+        person_id: &params.person_id,
+        person_name: params.person_name.as_deref(),
+        date_from: params.date_from.as_deref(),
+        date_to: params.date_to.as_deref(),
+        album_ids: &params.album_ids,
+        album_names: &params.album_names,
+        force_rerun: params.force_rerun,
+        run_at: chrono::Utc::now().to_rfc3339(),
+        config: PersistableConfig::from(&config),
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&manifest) {
+        let _ = tokio::fs::write(job_dir.join("job_manifest.json"), json).await;
+    }
+
+    // Collect already-processed asset IDs from the images directory so we can
+    // skip them when force_rerun is false.  Filenames are "{timestamp}_{asset_id}.jpg".
+    let already_done: HashSet<String> = if !params.force_rerun {
+        let mut ids = HashSet::new();
+        if let Ok(mut entries) = tokio::fs::read_dir(&images_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".jpg") {
+                    // The asset_id is appended last, separated by '_'.
+                    // UUIDs contain only hex and hyphens (no underscores), so
+                    // splitting on '_' and taking the last token is unambiguous.
+                    if let Some(id) = name.trim_end_matches(".jpg").split('_').last() {
+                        ids.insert(id.to_string());
+                    }
+                }
+            }
+        }
+        if !ids.is_empty() {
+            tracing::info!("{} assets already processed, will skip them", ids.len());
+        }
+        ids
+    } else {
+        HashSet::new()
+    };
 
     // Create Immich client
     let client = ImmichClient::new(&config.api)?;
 
-    // Base progress carrying person/album identity, reused for all updates in this job
+    // Base progress carrying job identity, reused for all updates in this job
     let params_base = Progress {
         person_id: Some(params.person_id.clone()),
         person_name: params.person_name.clone(),
+        date_from: params.date_from.clone(),
+        date_to: params.date_to.clone(),
         album_ids: params.album_ids.clone(),
         album_names: params.album_names.clone(),
         ..Progress::default()
@@ -281,15 +348,47 @@ async fn run_job_inner(
         ));
     }
 
-    let total = assets_with_faces.len() as u32;
-    tracing::info!("{} assets have face data", total);
+    // Partition into assets that need processing vs. those already done.
+    let (pending, skipped_count) = if already_done.is_empty() {
+        (assets_with_faces, 0usize)
+    } else {
+        let mut pending = Vec::new();
+        let mut skipped = 0usize;
+        for item in assets_with_faces {
+            if already_done.contains(&item.0.id) {
+                skipped += 1;
+            } else {
+                pending.push(item);
+            }
+        }
+        (pending, skipped)
+    };
 
-    // Update progress with total count
+    let total = (pending.len() + skipped_count) as u32;
+    tracing::info!(
+        "{} assets have face data ({} pending, {} already done)",
+        total,
+        pending.len(),
+        skipped_count
+    );
+
+    let resume_msg = if skipped_count > 0 {
+        format!(
+            "Resuming: {} already done, processing {} more...",
+            skipped_count,
+            pending.len()
+        )
+    } else {
+        format!("Processing {} images...", total)
+    };
+
+    // Update progress with total count (pre-credit already-done assets)
     state
         .update_progress(Progress {
             status: JobStatus::Running,
+            completed: skipped_count as u32,
             total,
-            message: Some(format!("Processing {} images...", total)),
+            message: Some(resume_msg),
             ..params_base.clone()
         })
         .await;
@@ -303,7 +402,7 @@ async fn run_job_inner(
         TimeIntervalTracker::new(&config.processing.time_interval).map(Arc::new);
 
     // Process images in parallel with concurrency limit
-    let completed = Arc::new(AtomicU32::new(0));
+    let completed = Arc::new(AtomicU32::new(skipped_count as u32));
     let semaphore = Arc::new(Semaphore::new(config.processing.max_workers));
     let client = Arc::new(client);
     let config = Arc::new(config);
@@ -312,9 +411,9 @@ async fn run_job_inner(
     // Atomic counters for real-time skip statistics (consolidated into single struct)
     let skip_stats = Arc::new(AtomicSkipStats::new());
 
-    let mut handles = Vec::with_capacity(assets_with_faces.len());
+    let mut handles = Vec::with_capacity(pending.len());
 
-    for (asset, face_data) in assets_with_faces {
+    for (asset, face_data) in pending {
         // Check for cancellation before spawning more tasks
         if cancel_token.is_cancelled() {
             break;

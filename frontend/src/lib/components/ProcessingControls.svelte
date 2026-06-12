@@ -1,5 +1,5 @@
 <script>
-  import { sanitizeFolderName, formatSize } from '../utils.js';
+  import { makeJobSlug, formatSize } from '../utils.js';
   import { JOB_STATUS, API } from '../constants.js';
   import { handleError } from '../errorHandler.js';
 
@@ -7,6 +7,7 @@
 
   let dateFrom = $state('');
   let dateTo = $state('');
+  let forceRerun = $state(false);
   let assetCount = $state(null);
   let loadingCount = $state(false);
   let starting = $state(false);
@@ -16,10 +17,15 @@
     jobStatus === JOB_STATUS.running || jobStatus === JOB_STATUS.compiling || jobStatus === JOB_STATUS.cancelling
   );
 
-  // Check if an output folder already exists for this person
+  // Check if an output folder already exists for this exact job configuration.
   let existingFolder = $derived.by(() => {
-    const expectedName = sanitizeFolderName(personName, personId);
+    const expectedName = makeJobSlug(personName, personId, dateFrom, dateTo, albums);
     return outputFolders.find(f => f.name === expectedName);
+  });
+
+  // Reset force_rerun when the target folder changes (no existing folder = nothing to re-run).
+  $effect(() => {
+    if (!existingFolder) forceRerun = false;
   });
 
   // Fetch asset count when personId or albums changes
@@ -68,13 +74,13 @@
           date_to: dateTo || null,
           album_ids: albums.map(a => a.id),
           album_names: albums.map(a => a.name),
+          force_rerun: forceRerun,
         }),
       });
 
       const data = await res.json();
 
       if (res.ok && data.success) {
-        // Notify parent of job start
         onupdate?.({
           status: JOB_STATUS.running,
           completed: 0,
@@ -99,19 +105,6 @@
       });
     } finally {
       starting = false;
-    }
-  }
-
-  function handleStartClick() {
-    if (existingFolder) {
-      const folder = existingFolder;
-      const message = `"${folder.name}" already has ${folder.image_count} images (${formatSize(folder.size_bytes)})${folder.has_video ? ' and a compiled video' : ''}.\n\nAll existing content in ${folder.name} will be permanently deleted.\n\nClick OK to continue.`;
-
-      if (confirm(message)) {
-        startProcessing();
-      }
-    } else {
-      startProcessing();
     }
   }
 </script>
@@ -155,9 +148,22 @@
     </label>
   </div>
 
+  {#if existingFolder}
+    <div class="existing-notice">
+      <div class="existing-summary">
+        Folder <code>{existingFolder.name}</code> already has {existingFolder.image_count} images ({formatSize(existingFolder.size_bytes)}){existingFolder.has_video ? ' + video' : ''}.
+        By default, already-processed images will be reused.
+      </div>
+      <label class="force-rerun-label">
+        <input type="checkbox" bind:checked={forceRerun} disabled={isRunning} />
+        <span>Force re-run (delete existing output and start fresh)</span>
+      </label>
+    </div>
+  {/if}
+
   <div class="actions">
-    <button type="button" class="start-btn" onclick={handleStartClick} disabled={starting || isRunning}>
-      {starting ? 'Starting...' : 'Start Processing'}
+    <button type="button" class="start-btn" onclick={startProcessing} disabled={starting || isRunning}>
+      {starting ? 'Starting...' : existingFolder && !forceRerun ? 'Resume Processing' : 'Start Processing'}
     </button>
   </div>
 </div>
@@ -247,6 +253,51 @@
   .date-filters input:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .existing-notice {
+    background: #0f1929;
+    border: 1px solid #1e3a5f;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .existing-summary {
+    font-size: 0.8125rem;
+    color: #7dafd6;
+  }
+
+  .existing-summary code {
+    font-family: monospace;
+    font-size: 0.8em;
+    background: #162033;
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+    color: #93c5fd;
+  }
+
+  .force-rerun-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8125rem;
+    color: #aaa;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .force-rerun-label input[type="checkbox"] {
+    accent-color: #dc2626;
+    cursor: pointer;
+  }
+
+  .force-rerun-label input[type="checkbox"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 
   .actions {
