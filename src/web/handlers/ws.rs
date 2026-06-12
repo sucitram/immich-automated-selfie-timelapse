@@ -92,6 +92,8 @@ fn progress_to_response(progress: &crate::web::state::Progress) -> ProgressRespo
         skip_stats: SkipStatsResponse::from(&progress.skip_stats),
         person_id: progress.person_id.clone(),
         person_name: progress.person_name.clone(),
+        date_from: progress.date_from.clone(),
+        date_to: progress.date_to.clone(),
         album_ids: progress.album_ids.clone(),
         album_names: progress.album_names.clone(),
     }
