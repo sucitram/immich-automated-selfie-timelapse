@@ -77,7 +77,11 @@ async fn main() -> anyhow::Result<()> {
     let app = web::create_router(state.clone());
 
     // Start server
-    let addr = SocketAddr::from(([0, 0, 0, 0], 5000));
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5000);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("Starting server on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
