@@ -1,4 +1,5 @@
 target/
+.git/
 output/
 node_modules/
 frontend/dist/

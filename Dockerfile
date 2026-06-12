@@ -7,7 +7,14 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build Rust binary
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+
 FROM ubuntu:24.04 AS rust-build
+ARG GIT_COMMIT
+ARG GIT_BRANCH
+ENV GIT_COMMIT=$GIT_COMMIT
+ENV GIT_BRANCH=$GIT_BRANCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git \
     cmake g++ make pkg-config \
