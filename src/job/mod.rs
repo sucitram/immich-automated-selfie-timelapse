@@ -349,7 +349,7 @@ async fn run_job_inner(
     }
 
     // Partition into assets that need processing vs. those already done.
-    let (pending, skipped_count) = if already_done.is_empty() {
+    let (mut pending, skipped_count) = if already_done.is_empty() {
         (assets_with_faces, 0usize)
     } else {
         let mut pending = Vec::new();
@@ -363,6 +363,19 @@ async fn run_job_inner(
         }
         (pending, skipped)
     };
+
+    // Sort so that within each time bucket the best photo arrives first.
+    // Priority: favorites > star rating > chronological order.
+    // The time-interval limiter uses first-wins, so ordering here determines
+    // which photo is kept when max_photos < candidates in a bucket.
+    pending.sort_by(|(a, _), (b, _)| {
+        let a_fav = a.is_favorite as i32;
+        let b_fav = b.is_favorite as i32;
+        b_fav
+            .cmp(&a_fav)
+            .then(b.rating.cmp(&a.rating))
+            .then(a.file_created_at.cmp(&b.file_created_at))
+    });
 
     let total = (pending.len() + skipped_count) as u32;
     tracing::info!(

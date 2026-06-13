@@ -50,6 +50,12 @@ pub struct Asset {
     pub file_created_at: Option<String>,
     pub local_date_time: Option<String>,
     pub people: Option<Vec<PersonWithFaces>>,
+    /// User-assigned star rating (0 = unrated, 1–5 stars). Absent in older Immich versions.
+    #[serde(default)]
+    pub rating: i32,
+    /// Whether the user has marked this asset as a favourite.
+    #[serde(default)]
+    pub is_favorite: bool,
 }
 
 /// Person with face data.
